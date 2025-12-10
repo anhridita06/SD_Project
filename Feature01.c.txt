@@ -1,0 +1,105 @@
+#include <gtk/gtk.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <string.h>
+#include <stdlib.h>
+
+GtkWidget *window;
+GtkWidget *folder_tree;
+GtkWidget *file_list;
+GtkTreeStore *folder_store;
+GtkListStore *file_store;
+
+char current_folder[1024] = ".";
+
+void populate_file_list(const char *folder) {
+    gtk_list_store_clear(file_store);
+    DIR *d = opendir(folder);
+    if (!d) return;
+    struct dirent *dir;
+    while ((dir = readdir(d))) {
+        if (dir->d_name[0] == '.') continue;
+        char path[1024];
+        snprintf(path, sizeof(path), "%s/%s", folder, dir->d_name);
+        struct stat st;
+        if (stat(path, &st) != 0) continue;
+        if (S_ISREG(st.st_mode)) {
+            GtkTreeIter iter;
+            gtk_list_store_append(file_store, &iter);
+            gtk_list_store_set(file_store, &iter, 0, dir->d_name, 1, path, -1);
+        }
+    }
+    closedir(d);
+}
+
+void populate_folder_tree(GtkTreeStore *store, GtkTreeIter *parent, const char *path) {
+    DIR *d = opendir(path);
+    if (!d) return;
+    struct dirent *dir;
+    while ((dir = readdir(d))) {
+        if (dir->d_name[0] == '.') continue;
+        char child[1024];
+        snprintf(child, sizeof(child), "%s/%s", path, dir->d_name);
+        struct stat st;
+        if (stat(child, &st) != 0) continue;
+        if (S_ISDIR(st.st_mode)) {
+            GtkTreeIter iter;
+            gtk_tree_store_append(store, &iter, parent);
+            gtk_tree_store_set(store, &iter, 0, dir->d_name, 1, child, -1);
+            populate_folder_tree(store, &iter, child);
+        }
+    }
+    closedir(d);
+}
+
+void on_tree_row_activated(GtkTreeView *tree, GtkTreePath *path,
+                           GtkTreeViewColumn *col, gpointer user_data)
+{
+    GtkTreeIter iter;
+    GtkTreeModel *model = gtk_tree_view_get_model(tree);
+    if (gtk_tree_model_get_iter(model, &iter, path)) {
+        char *folder_path;
+        gtk_tree_model_get(model, &iter, 1, &folder_path, -1);
+        populate_file_list(folder_path);
+        g_free(folder_path);
+    }
+}
+
+void activate(GtkApplication *app, gpointer user_data) {
+    window = gtk_application_window_new(app);
+    gtk_window_set_title(GTK_WINDOW(window), "File Viewer");
+    gtk_window_set_default_size(GTK_WINDOW(window), 900, 600);
+
+    GtkWidget *paned = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
+    gtk_container_add(GTK_CONTAINER(window), paned);
+
+    folder_store = gtk_tree_store_new(2, G_TYPE_STRING, G_TYPE_STRING);
+    folder_tree = gtk_tree_view_new_with_model(GTK_TREE_MODEL(folder_store));
+    GtkCellRenderer *r1 = gtk_cell_renderer_text_new();
+    GtkTreeViewColumn *c1 = gtk_tree_view_column_new_with_attributes("Folders", r1, "text", 0, NULL);
+    gtk_tree_view_append_column(GTK_TREE_VIEW(folder_tree), c1);
+    populate_folder_tree(folder_store, NULL, current_folder);
+    g_signal_connect(folder_tree, "row-activated", G_CALLBACK(on_tree_row_activated), NULL);
+    GtkWidget *scroll_left = gtk_scrolled_window_new(NULL, NULL);
+    gtk_container_add(GTK_CONTAINER(scroll_left), folder_tree);
+    gtk_paned_pack1(GTK_PANED(paned), scroll_left, TRUE, FALSE);
+
+    file_store = gtk_list_store_new(2, G_TYPE_STRING, G_TYPE_STRING);
+    file_list = gtk_tree_view_new_with_model(GTK_TREE_MODEL(file_store));
+    GtkCellRenderer *r2 = gtk_cell_renderer_text_new();
+    GtkTreeViewColumn *c2 = gtk_tree_view_column_new_with_attributes("Files", r2, "text", 0, NULL);
+    gtk_tree_view_append_column(GTK_TREE_VIEW(file_list), c2);
+    GtkWidget *scroll_right = gtk_scrolled_window_new(NULL, NULL);
+    gtk_container_add(GTK_CONTAINER(scroll_right), file_list);
+    gtk_paned_pack2(GTK_PANED(paned), scroll_right, TRUE, FALSE);
+
+    gtk_widget_show_all(window);
+}
+
+int main(int argc, char **argv) {
+    GtkApplication *app = gtk_application_new("com.example.filebrowser", G_APPLICATION_DEFAULT_FLAGS);
+    g_signal_connect(app, "activate", G_CALLBACK(activate), NULL);
+    int status = g_application_run(G_APPLICATION(app), argc, argv);
+    g_object_unref(app);
+    return status;
+}
